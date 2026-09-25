@@ -1,0 +1,39 @@
+server:
+  port: 8087
+spring:
+  application:
+    name: notification-service
+  kafka:
+    bootstrap-servers: localhost:9092
+    admin:
+      fail-fast: false
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: always
+app:
+  kafka:
+    topics:
+      payment-completed: payment-completed
+      payment-failed: payment-failed
+      notification-events: notification-events
+      dead-letter-topic: order-processing-dlt
+    consumer-groups:
+      notification: notification-service-group
+      audit: notification-audit-group
+      dlt-monitor: dlt-monitoring-group
+    producer:
+      acks: all
+      retries: 5
+    retry:
+      initial-interval-ms: 1000
+      multiplier: 2.0
+      max-elapsed-time-ms: 15000
+logging:
+  level:
+    com.example.notificationservice: DEBUG
+    org.apache.kafka: WARN

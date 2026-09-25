@@ -1,0 +1,37 @@
+server:
+  port: 8085
+spring:
+  application:
+    name: order-service
+  kafka:
+    bootstrap-servers: localhost:9092
+    admin:
+      fail-fast: false
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: always
+app:
+  kafka:
+    topics:
+      order-created: order-created
+      payment-completed: payment-completed
+      payment-failed: payment-failed
+      dead-letter-topic: order-processing-dlt
+    consumer-groups:
+      order-status-updater: order-status-updater-group
+    producer:
+      acks: all
+      retries: 5
+    retry:
+      initial-interval-ms: 1000
+      multiplier: 2.0
+      max-elapsed-time-ms: 15000
+logging:
+  level:
+    com.example.orderservice: DEBUG
+    org.apache.kafka: WARN

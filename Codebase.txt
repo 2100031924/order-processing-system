@@ -1,0 +1,1816 @@
+================================================================================
+CODEBASE - order-processing-system (src/main/java only)
+================================================================================
+Project Root: E:\order-processing-system
+Generated On: 2026-09-25 08:32:02
+Total Files Included: 36
+Filter: src/main/java/**/*.java only (no test, no resources, no pom, no config yml, no mvnw)
+Services Covered: order-service, payment-service, notification-service
+================================================================================
+
+TABLE OF CONTENTS
+--------------------------------------------------------------------------------
+ 1. notification-service/src/main/java/com/example/notificationservice/NotificationServiceApplication.java
+ 2. notification-service/src/main/java/com/example/notificationservice/config/KafkaConsumerConfig.java
+ 3. notification-service/src/main/java/com/example/notificationservice/config/KafkaProducerConfig.java
+ 4. notification-service/src/main/java/com/example/notificationservice/config/KafkaTopicConfig.java
+ 5. notification-service/src/main/java/com/example/notificationservice/event/NotificationEvent.java
+ 6. notification-service/src/main/java/com/example/notificationservice/event/PaymentCompletedEvent.java
+ 7. notification-service/src/main/java/com/example/notificationservice/event/PaymentFailedEvent.java
+ 8. notification-service/src/main/java/com/example/notificationservice/notification/AuditConsumer.java
+ 9. notification-service/src/main/java/com/example/notificationservice/notification/DltMonitorConsumer.java
+10. notification-service/src/main/java/com/example/notificationservice/notification/NotificationConsumer.java
+11. order-service/src/main/java/com/example/orderservice/OrderServiceApplication.java
+12. order-service/src/main/java/com/example/orderservice/config/KafkaConsumerConfig.java
+13. order-service/src/main/java/com/example/orderservice/config/KafkaProducerConfig.java
+14. order-service/src/main/java/com/example/orderservice/config/KafkaTopicConfig.java
+15. order-service/src/main/java/com/example/orderservice/consumer/OrderStatusUpdaterConsumer.java
+16. order-service/src/main/java/com/example/orderservice/controller/OrderController.java
+17. order-service/src/main/java/com/example/orderservice/dto/CreateOrderRequest.java
+18. order-service/src/main/java/com/example/orderservice/dto/OrderResponse.java
+19. order-service/src/main/java/com/example/orderservice/event/OrderCreatedEvent.java
+20. order-service/src/main/java/com/example/orderservice/event/PaymentCompletedEvent.java
+21. order-service/src/main/java/com/example/orderservice/event/PaymentFailedEvent.java
+22. order-service/src/main/java/com/example/orderservice/exception/GlobalExceptionHandler.java
+23. order-service/src/main/java/com/example/orderservice/model/Order.java
+24. order-service/src/main/java/com/example/orderservice/model/OrderStatus.java
+25. order-service/src/main/java/com/example/orderservice/service/OrderService.java
+26. payment-service/src/main/java/com/example/paymentservice/PaymentServiceApplication.java
+27. payment-service/src/main/java/com/example/paymentservice/config/KafkaConsumerConfig.java
+28. payment-service/src/main/java/com/example/paymentservice/config/KafkaProducerConfig.java
+29. payment-service/src/main/java/com/example/paymentservice/config/KafkaTopicConfig.java
+30. payment-service/src/main/java/com/example/paymentservice/event/OrderCreatedEvent.java
+31. payment-service/src/main/java/com/example/paymentservice/event/PaymentCompletedEvent.java
+32. payment-service/src/main/java/com/example/paymentservice/event/PaymentFailedEvent.java
+33. payment-service/src/main/java/com/example/paymentservice/exception/TransientPaymentException.java
+34. payment-service/src/main/java/com/example/paymentservice/model/PaymentStatus.java
+35. payment-service/src/main/java/com/example/paymentservice/payment/PaymentConsumer.java
+36. payment-service/src/main/java/com/example/paymentservice/payment/PaymentService.java
+
+================================================================================
+
+
+################################################################################
+# ORDER-SERVICE  (15 java files - src/main/java)
+################################################################################
+
+================================================================================
+File 1: order-service/src/main/java/com/example/orderservice/OrderServiceApplication.java
+Absolute Path: E:\order-processing-system\order-service\src\main\java\com\example\orderservice\OrderServiceApplication.java
+================================================================================
+
+package com.example.orderservice;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+@SpringBootApplication
+public class OrderServiceApplication {
+
+    public static void main(String[] args) {
+        SpringApplication.run(OrderServiceApplication.class, args);
+    }
+
+}
+
+
+================================================================================
+File 2: order-service/src/main/java/com/example/orderservice/config/KafkaConsumerConfig.java
+Absolute Path: E:\order-processing-system\order-service\src\main\java\com\example\orderservice\config\KafkaConsumerConfig.java
+================================================================================
+
+package com.example.orderservice.config;
+
+import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.serialization.StringDeserializer;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.kafka.annotation.EnableKafka;
+import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
+import org.springframework.kafka.core.ConsumerFactory;
+import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
+import org.springframework.kafka.core.KafkaOperations;
+import org.springframework.kafka.listener.ContainerProperties;
+import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
+import org.springframework.kafka.listener.DefaultErrorHandler;
+import org.springframework.kafka.support.serializer.ErrorHandlingDeserializer;
+import org.springframework.kafka.support.serializer.JsonDeserializer;
+import org.springframework.util.backoff.ExponentialBackOff;
+
+import java.util.HashMap;
+import java.util.Map;
+
+@Slf4j
+@EnableKafka
+@Configuration
+public class KafkaConsumerConfig {
+    @Value("${spring.kafka.bootstrap-servers}")
+    private String bootstrapServers;
+
+    @Value("${app.kafka.topics.dead-letter-topic}")
+    private String dltTopic;
+
+    @Value("${app.kafka.retry.initial-interval-ms:1000}")
+    private long retryInitialIntervalMs;
+
+    @Value("${app.kafka.retry.multiplier:2.0}")
+    private double retryMultiplier;
+
+    @Value("${app.kafka.retry.max-elapsed-time-ms:15000}")
+    private long retryMaxElapsedTimeMs;
+
+    @Bean
+    public ConsumerFactory<String, Object> paymentResultConsumerFactory() {
+        Map<String, Object> props = new HashMap<>();
+        props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
+        props.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, ErrorHandlingDeserializer.class);
+        props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, ErrorHandlingDeserializer.class);
+        props.put(ErrorHandlingDeserializer.KEY_DESERIALIZER_CLASS, StringDeserializer.class);
+        props.put(ErrorHandlingDeserializer.VALUE_DESERIALIZER_CLASS, JsonDeserializer.class);
+        props.put(JsonDeserializer.TRUSTED_PACKAGES, "com.example.orderservice.event,com.example.orderservice.*,java.util,java.lang");
+        props.put(JsonDeserializer.TYPE_MAPPINGS, "PaymentCompletedEvent:com.example.orderservice.event.PaymentCompletedEvent,PaymentFailedEvent:com.example.orderservice.event.PaymentFailedEvent");
+        props.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
+        props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+        props.put(ConsumerConfig.RECONNECT_BACKOFF_MS_CONFIG, 3000);
+        props.put(ConsumerConfig.RECONNECT_BACKOFF_MAX_MS_CONFIG, 10000);
+        props.put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, 50);
+        return new DefaultKafkaConsumerFactory<>(props);
+    }
+
+    @Bean
+    public DefaultErrorHandler orderStatusErrorHandler(KafkaOperations<String, Object> kafkaOperations) {
+        DeadLetterPublishingRecoverer recoverer = new DeadLetterPublishingRecoverer(kafkaOperations,
+                (record, exception) -> {
+                    log.error("Retries exhausted for key [{}] on topic [{}]. Routing record to DLT [{}].",
+                            record.key(), record.topic(), dltTopic, exception);
+                    return new TopicPartition(dltTopic, record.partition());
+                });
+        ExponentialBackOff backOff = new ExponentialBackOff(retryInitialIntervalMs, retryMultiplier);
+        backOff.setMaxElapsedTime(retryMaxElapsedTimeMs);
+        DefaultErrorHandler handler = new DefaultErrorHandler(recoverer, backOff);
+        handler.addNotRetryableExceptions(IllegalArgumentException.class);
+        return handler;
+    }
+
+    @Bean
+    public ConcurrentKafkaListenerContainerFactory<String, Object> kafkaListenerContainerFactory(
+            ConsumerFactory<String, Object> paymentResultConsumerFactory,
+            DefaultErrorHandler orderStatusErrorHandler) {
+        ConcurrentKafkaListenerContainerFactory<String, Object> factory = new ConcurrentKafkaListenerContainerFactory<>();
+        factory.setConsumerFactory(paymentResultConsumerFactory);
+        factory.setCommonErrorHandler(orderStatusErrorHandler);
+        factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL_IMMEDIATE);
+        factory.setConcurrency(3);
+        return factory;
+    }
+}
+
+
+================================================================================
+File 3: order-service/src/main/java/com/example/orderservice/config/KafkaProducerConfig.java
+Absolute Path: E:\order-processing-system\order-service\src\main\java\com\example\orderservice\config\KafkaProducerConfig.java
+================================================================================
+
+package com.example.orderservice.config;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.common.serialization.StringSerializer;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.kafka.core.DefaultKafkaProducerFactory;
+import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.kafka.core.ProducerFactory;
+import org.springframework.kafka.support.serializer.JsonSerializer;
+
+import java.util.HashMap;
+import java.util.Map;
+
+@Configuration
+public class KafkaProducerConfig {
+    @Value("${spring.kafka.bootstrap-servers}")
+    private String bootstrapServers;
+
+    @Value("${app.kafka.producer.acks:all}")
+    private String acks;
+
+    @Value("${app.kafka.producer.retries:5}")
+    private int retries;
+
+    @Bean
+    public ObjectMapper objectMapper() {
+        ObjectMapper mapper = new ObjectMapper();
+        mapper.registerModule(new JavaTimeModule());
+        mapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+        return mapper;
+    }
+
+    @Bean
+    public ProducerFactory<String, Object> producerFactory(ObjectMapper objectMapper) {
+        Map<String, Object> configProps = new HashMap<>();
+        configProps.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
+        configProps.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
+        configProps.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, JsonSerializer.class);
+        configProps.put(ProducerConfig.ACKS_CONFIG, acks);
+        configProps.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);
+        configProps.put(ProducerConfig.RETRIES_CONFIG, retries);
+        configProps.put(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION, 5);
+        configProps.put(JsonSerializer.ADD_TYPE_INFO_HEADERS, true);
+        return new DefaultKafkaProducerFactory<>(configProps, new StringSerializer(), new JsonSerializer<>(objectMapper));
+    }
+
+    @Bean
+    public KafkaTemplate<String, Object> kafkaTemplate(ProducerFactory<String, Object> producerFactory) {
+        return new KafkaTemplate<>(producerFactory);
+    }
+}
+
+
+================================================================================
+File 4: order-service/src/main/java/com/example/orderservice/config/KafkaTopicConfig.java
+Absolute Path: E:\order-processing-system\order-service\src\main\java\com\example\orderservice\config\KafkaTopicConfig.java
+================================================================================
+
+package com.example.orderservice.config;
+
+import org.apache.kafka.clients.admin.NewTopic;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.kafka.config.TopicBuilder;
+
+@Configuration
+public class KafkaTopicConfig {
+    @Value("${app.kafka.topics.order-created}")
+    private String orderCreatedTopic;
+
+    @Value("${app.kafka.topics.payment-completed}")
+    private String paymentCompletedTopic;
+
+    @Value("${app.kafka.topics.payment-failed}")
+    private String paymentFailedTopic;
+
+    @Value("${app.kafka.topics.dead-letter-topic}")
+    private String dltTopic;
+
+    @Bean
+    public NewTopic orderCreatedTopic() {
+        return TopicBuilder.name(orderCreatedTopic)
+                .partitions(3)
+                .replicas(1)
+                .build();
+    }
+
+    @Bean
+    public NewTopic paymentCompletedTopic() {
+        return TopicBuilder.name(paymentCompletedTopic)
+                .partitions(3)
+                .replicas(1)
+                .build();
+    }
+
+    @Bean
+    public NewTopic paymentFailedTopic() {
+        return TopicBuilder.name(paymentFailedTopic)
+                .partitions(3)
+                .replicas(1)
+                .build();
+    }
+
+    @Bean
+    public NewTopic deadLetterTopic() {
+        return TopicBuilder.name(dltTopic)
+                .partitions(3)
+                .replicas(1)
+                .build();
+    }
+}
+
+
+================================================================================
+File 5: order-service/src/main/java/com/example/orderservice/consumer/OrderStatusUpdaterConsumer.java
+Absolute Path: E:\order-processing-system\order-service\src\main\java\com\example\orderservice\consumer\OrderStatusUpdaterConsumer.java
+================================================================================
+
+package com.example.orderservice.consumer;
+
+import com.example.orderservice.event.PaymentCompletedEvent;
+import com.example.orderservice.event.PaymentFailedEvent;
+import com.example.orderservice.model.OrderStatus;
+import com.example.orderservice.service.OrderService;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.springframework.kafka.annotation.KafkaListener;
+import org.springframework.kafka.support.Acknowledgment;
+import org.springframework.stereotype.Component;
+
+@Slf4j
+@Component
+@RequiredArgsConstructor
+public class OrderStatusUpdaterConsumer {
+    private final OrderService orderService;
+
+    @KafkaListener(
+            topics = {"${app.kafka.topics.payment-completed}", "${app.kafka.topics.payment-failed}"},
+            groupId = "${app.kafka.consumer-groups.order-status-updater}",
+            containerFactory = "kafkaListenerContainerFactory")
+    public void handlePaymentResult(ConsumerRecord<String, Object> record, Acknowledgment ack) {
+        log.info("OrderStatusUpdaterConsumer consumed record from topic [{}] Key [{}] Partition [{}] Offset [{}] Thread [{}]",
+                record.topic(), record.key(), record.partition(), record.offset(), Thread.currentThread().getName());
+
+        Object event = record.value();
+        if (event == null) {
+            log.warn("Null payload at partition [{}] offset [{}]. Committing and skipping.", record.partition(), record.offset());
+            ack.acknowledge();
+            return;
+        }
+
+        if (event instanceof PaymentCompletedEvent completed) {
+            orderService.updateOrderStatus(completed.getOrderId(), OrderStatus.PAYMENT_SUCCESSFUL);
+            log.info("Order [{}] marked as PAYMENT_SUCCESSFUL", completed.getOrderId());
+        } else if (event instanceof PaymentFailedEvent failed) {
+            orderService.updateOrderStatus(failed.getOrderId(), OrderStatus.PAYMENT_FAILED);
+            log.info("Order [{}] marked as PAYMENT_FAILED with reason [{}]", failed.getOrderId(), failed.getFailureReason());
+        } else {
+            throw new IllegalArgumentException("Unexpected event type: " + event.getClass().getName());
+        }
+
+        ack.acknowledge();
+        log.info("Offset committed for partition [{}] at offset [{}]", record.partition(), record.offset());
+    }
+}
+
+
+================================================================================
+File 6: order-service/src/main/java/com/example/orderservice/controller/OrderController.java
+Absolute Path: E:\order-processing-system\order-service\src\main\java\com\example\orderservice\controller\OrderController.java
+================================================================================
+
+package com.example.orderservice.controller;
+
+import com.example.orderservice.dto.CreateOrderRequest;
+import com.example.orderservice.dto.OrderResponse;
+import com.example.orderservice.model.Order;
+import com.example.orderservice.service.OrderService;
+import jakarta.validation.Valid;
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
+
+@RestController
+@RequestMapping("/api/v1/orders")
+@RequiredArgsConstructor
+public class OrderController {
+    private final OrderService orderService;
+
+    @PostMapping
+    public ResponseEntity<OrderResponse> createOrder(@Valid @RequestBody CreateOrderRequest request) {
+        OrderResponse response = orderService.createOrder(request);
+        return ResponseEntity.status(HttpStatus.ACCEPTED).body(response);
+    }
+
+    @GetMapping
+    public ResponseEntity<List<Order>> listOrders() {
+        return ResponseEntity.ok(orderService.listOrders());
+    }
+
+    @GetMapping("/{orderId}")
+    public ResponseEntity<Order> getOrder(@PathVariable String orderId) {
+        Order order = orderService.getOrder(orderId);
+        if (order == null) {
+            return ResponseEntity.notFound().build();
+        }
+        return ResponseEntity.ok(order);
+    }
+}
+
+
+================================================================================
+File 7: order-service/src/main/java/com/example/orderservice/dto/CreateOrderRequest.java
+Absolute Path: E:\order-processing-system\order-service\src\main\java\com\example\orderservice\dto\CreateOrderRequest.java
+================================================================================
+
+package com.example.orderservice.dto;
+
+import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+import lombok.Data;
+
+import java.math.BigDecimal;
+
+@Data
+public class CreateOrderRequest {
+    @NotBlank(message = "customerId is mandatory")
+    private String customerId;
+
+    @NotNull(message = "amount is mandatory")
+    @DecimalMin(value = "0.01", message = "amount must be greater than zero")
+    private BigDecimal amount;
+}
+
+
+================================================================================
+File 8: order-service/src/main/java/com/example/orderservice/dto/OrderResponse.java
+Absolute Path: E:\order-processing-system\order-service\src\main\java\com\example\orderservice\dto\OrderResponse.java
+================================================================================
+
+package com.example.orderservice.dto;
+
+import com.example.orderservice.model.OrderStatus;
+import lombok.Builder;
+import lombok.Data;
+
+import java.math.BigDecimal;
+
+@Data
+@Builder
+public class OrderResponse {
+    private String orderId;
+    private String customerId;
+    private BigDecimal amount;
+    private OrderStatus status;
+    private String message;
+}
+
+
+================================================================================
+File 9: order-service/src/main/java/com/example/orderservice/event/OrderCreatedEvent.java
+Absolute Path: E:\order-processing-system\order-service\src\main\java\com\example\orderservice\event\OrderCreatedEvent.java
+================================================================================
+
+package com.example.orderservice.event;
+
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
+
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class OrderCreatedEvent {
+    private String eventId;
+    private String orderId;
+    private String customerId;
+    private BigDecimal amount;
+    private LocalDateTime timestamp;
+}
+
+
+================================================================================
+File 10: order-service/src/main/java/com/example/orderservice/event/PaymentCompletedEvent.java
+Absolute Path: E:\order-processing-system\order-service\src\main\java\com\example\orderservice\event\PaymentCompletedEvent.java
+================================================================================
+
+package com.example.orderservice.event;
+
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
+
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class PaymentCompletedEvent {
+    private String paymentId;
+    private String orderId;
+    private String customerId;
+    private BigDecimal amount;
+    private LocalDateTime timestamp;
+}
+
+
+================================================================================
+File 11: order-service/src/main/java/com/example/orderservice/event/PaymentFailedEvent.java
+Absolute Path: E:\order-processing-system\order-service\src\main\java\com\example\orderservice\event\PaymentFailedEvent.java
+================================================================================
+
+package com.example.orderservice.event;
+
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
+
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class PaymentFailedEvent {
+    private String paymentId;
+    private String orderId;
+    private String customerId;
+    private BigDecimal amount;
+    private String failureReason;
+    private LocalDateTime timestamp;
+}
+
+
+================================================================================
+File 12: order-service/src/main/java/com/example/orderservice/exception/GlobalExceptionHandler.java
+Absolute Path: E:\order-processing-system\order-service\src\main\java\com\example\orderservice\exception\GlobalExceptionHandler.java
+================================================================================
+
+package com.example.orderservice.exception;
+
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.validation.FieldError;
+import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.RestControllerAdvice;
+
+import java.util.HashMap;
+import java.util.Map;
+
+@Slf4j
+@RestControllerAdvice
+public class GlobalExceptionHandler {
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    public ResponseEntity<Map<String, String>> handleValidationExceptions(MethodArgumentNotValidException ex) {
+        Map<String, String> errors = new HashMap<>();
+        for (FieldError error : ex.getBindingResult().getFieldErrors()) {
+            errors.put(error.getField(), error.getDefaultMessage());
+        }
+        log.warn("Validation failed: {}", errors);
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(errors);
+    }
+
+    @ExceptionHandler(Exception.class)
+    public ResponseEntity<Map<String, String>> handleGenericException(Exception ex) {
+        log.error("Unhandled exception occurred", ex);
+        Map<String, String> error = new HashMap<>();
+        error.put("error", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
+    }
+}
+
+
+================================================================================
+File 13: order-service/src/main/java/com/example/orderservice/model/Order.java
+Absolute Path: E:\order-processing-system\order-service\src\main\java\com\example\orderservice\model\Order.java
+================================================================================
+
+package com.example.orderservice.model;
+
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
+
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class Order {
+    private String orderId;
+    private String customerId;
+    private BigDecimal amount;
+    private OrderStatus status;
+    private LocalDateTime createdAt;
+}
+
+
+================================================================================
+File 14: order-service/src/main/java/com/example/orderservice/model/OrderStatus.java
+Absolute Path: E:\order-processing-system\order-service\src\main\java\com\example\orderservice\model\OrderStatus.java
+================================================================================
+
+package com.example.orderservice.model;
+
+public enum OrderStatus {
+    PENDING,
+    PAYMENT_SUCCESSFUL,
+    PAYMENT_FAILED
+}
+
+
+================================================================================
+File 15: order-service/src/main/java/com/example/orderservice/service/OrderService.java
+Absolute Path: E:\order-processing-system\order-service\src\main\java\com\example\orderservice\service\OrderService.java
+================================================================================
+
+package com.example.orderservice.service;
+
+import com.example.orderservice.dto.CreateOrderRequest;
+import com.example.orderservice.dto.OrderResponse;
+import com.example.orderservice.event.OrderCreatedEvent;
+import com.example.orderservice.model.Order;
+import com.example.orderservice.model.OrderStatus;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.kafka.support.SendResult;
+import org.springframework.stereotype.Service;
+
+import java.time.LocalDateTime;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+
+@Slf4j
+@Service
+@RequiredArgsConstructor
+public class OrderService {
+    private final KafkaTemplate<String, Object> kafkaTemplate;
+    private final Map<String, Order> orderRepository = new ConcurrentHashMap<>();
+
+    @Value("${app.kafka.topics.order-created}")
+    private String orderCreatedTopic;
+
+    public OrderResponse createOrder(CreateOrderRequest request) {
+        String orderId = UUID.randomUUID().toString();
+        Order order = Order.builder()
+                .orderId(orderId)
+                .customerId(request.getCustomerId())
+                .amount(request.getAmount())
+                .status(OrderStatus.PENDING)
+                .createdAt(LocalDateTime.now())
+                .build();
+
+        orderRepository.put(orderId, order);
+
+        OrderCreatedEvent event = OrderCreatedEvent.builder()
+                .eventId(UUID.randomUUID().toString())
+                .orderId(order.getOrderId())
+                .customerId(order.getCustomerId())
+                .amount(order.getAmount())
+                .timestamp(LocalDateTime.now())
+                .build();
+
+        log.info("Dispatching OrderCreatedEvent for Order ID: {} with Key: {}", orderId, orderId);
+        CompletableFuture<SendResult<String, Object>> future = kafkaTemplate.send(orderCreatedTopic, orderId, event);
+        future.whenComplete((result, ex) -> {
+            if (ex == null) {
+                log.info("OrderCreatedEvent successfully published: Order ID [{}] -> Topic [{}], Partition [{}], Offset [{}]",
+                        orderId, result.getRecordMetadata().topic(), result.getRecordMetadata().partition(), result.getRecordMetadata().offset());
+            } else {
+                log.error("Failed to publish OrderCreatedEvent for Order ID: [{}]", orderId, ex);
+            }
+        });
+
+        return OrderResponse.builder()
+                .orderId(order.getOrderId())
+                .customerId(order.getCustomerId())
+                .amount(order.getAmount())
+                .status(order.getStatus())
+                .message("Order submitted successfully and is processing asynchronously.")
+                .build();
+    }
+
+    public Order getOrder(String orderId) {
+        return orderRepository.get(orderId);
+    }
+
+    public List<Order> listOrders() {
+        return orderRepository.values().stream()
+                .sorted(Comparator.comparing(Order::getCreatedAt).reversed())
+                .toList();
+    }
+
+    public void updateOrderStatus(String orderId, OrderStatus status) {
+        Order order = orderRepository.get(orderId);
+        if (order != null) {
+            order.setStatus(status);
+            orderRepository.put(orderId, order);
+            log.info("In-memory order state updated: Order ID [{}] -> Status [{}]", orderId, status);
+        }
+    }
+}
+
+
+
+################################################################################
+# PAYMENT-SERVICE  (11 java files - src/main/java)
+################################################################################
+
+================================================================================
+File 16: payment-service/src/main/java/com/example/paymentservice/PaymentServiceApplication.java
+Absolute Path: E:\order-processing-system\payment-service\src\main\java\com\example\paymentservice\PaymentServiceApplication.java
+================================================================================
+
+package com.example.paymentservice;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+@SpringBootApplication
+public class PaymentServiceApplication {
+
+    public static void main(String[] args) {
+        SpringApplication.run(PaymentServiceApplication.class, args);
+    }
+
+}
+
+
+================================================================================
+File 17: payment-service/src/main/java/com/example/paymentservice/config/KafkaConsumerConfig.java
+Absolute Path: E:\order-processing-system\payment-service\src\main\java\com\example\paymentservice\config\KafkaConsumerConfig.java
+================================================================================
+
+package com.example.paymentservice.config;
+
+import com.example.paymentservice.event.OrderCreatedEvent;
+import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.serialization.StringDeserializer;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.kafka.annotation.EnableKafka;
+import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
+import org.springframework.kafka.core.ConsumerFactory;
+import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
+import org.springframework.kafka.core.KafkaOperations;
+import org.springframework.kafka.listener.ContainerProperties;
+import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
+import org.springframework.kafka.listener.DefaultErrorHandler;
+import org.springframework.kafka.support.serializer.ErrorHandlingDeserializer;
+import org.springframework.kafka.support.serializer.JsonDeserializer;
+import org.springframework.util.backoff.ExponentialBackOff;
+
+import java.util.HashMap;
+import java.util.Map;
+
+@Slf4j
+@EnableKafka
+@Configuration
+public class KafkaConsumerConfig {
+    @Value("${spring.kafka.bootstrap-servers}")
+    private String bootstrapServers;
+
+    @Value("${app.kafka.topics.dead-letter-topic}")
+    private String dltTopic;
+
+    @Value("${app.kafka.retry.initial-interval-ms:1000}")
+    private long retryInitialIntervalMs;
+
+    @Value("${app.kafka.retry.multiplier:2.0}")
+    private double retryMultiplier;
+
+    @Value("${app.kafka.retry.max-elapsed-time-ms:15000}")
+    private long retryMaxElapsedTimeMs;
+
+    @Bean
+    public ConsumerFactory<String, Object> orderCreatedConsumerFactory() {
+        Map<String, Object> props = new HashMap<>();
+        props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
+        props.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, ErrorHandlingDeserializer.class);
+        props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, ErrorHandlingDeserializer.class);
+        props.put(ErrorHandlingDeserializer.KEY_DESERIALIZER_CLASS, StringDeserializer.class);
+        props.put(ErrorHandlingDeserializer.VALUE_DESERIALIZER_CLASS, JsonDeserializer.class);
+        props.put(JsonDeserializer.TRUSTED_PACKAGES, "com.example.paymentservice.*,com.example.orderservice.*,java.util,java.lang");
+        props.put(JsonDeserializer.TYPE_MAPPINGS, "com.example.orderservice.event.OrderCreatedEvent:com.example.paymentservice.event.OrderCreatedEvent");
+        props.put(JsonDeserializer.VALUE_DEFAULT_TYPE, OrderCreatedEvent.class.getName());
+        props.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
+        props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+        props.put(ConsumerConfig.RECONNECT_BACKOFF_MS_CONFIG, 3000);
+        props.put(ConsumerConfig.RECONNECT_BACKOFF_MAX_MS_CONFIG, 10000);
+        props.put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, 50);
+        return new DefaultKafkaConsumerFactory<>(props);
+    }
+
+    @Bean
+    public DefaultErrorHandler errorHandler(KafkaOperations<String, Object> kafkaOperations) {
+        DeadLetterPublishingRecoverer recoverer = new DeadLetterPublishingRecoverer(kafkaOperations,
+                (record, exception) -> {
+                    log.error("Retries exhausted for key [{}] on topic [{}]. Routing record to DLT [{}].",
+                            record.key(), record.topic(), dltTopic, exception);
+                    return new TopicPartition(dltTopic, record.partition());
+                });
+        ExponentialBackOff backOff = new ExponentialBackOff(retryInitialIntervalMs, retryMultiplier);
+        backOff.setMaxElapsedTime(retryMaxElapsedTimeMs);
+        DefaultErrorHandler handler = new DefaultErrorHandler(recoverer, backOff);
+        handler.addNotRetryableExceptions(IllegalArgumentException.class);
+        return handler;
+    }
+
+    @Bean
+    public ConcurrentKafkaListenerContainerFactory<String, Object> kafkaListenerContainerFactory(
+            ConsumerFactory<String, Object> orderCreatedConsumerFactory,
+            DefaultErrorHandler errorHandler) {
+        ConcurrentKafkaListenerContainerFactory<String, Object> factory =
+                new ConcurrentKafkaListenerContainerFactory<>();
+        factory.setConsumerFactory(orderCreatedConsumerFactory);
+        factory.setCommonErrorHandler(errorHandler);
+        factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL_IMMEDIATE);
+        factory.setConcurrency(3);
+        return factory;
+    }
+}
+
+
+================================================================================
+File 18: payment-service/src/main/java/com/example/paymentservice/config/KafkaProducerConfig.java
+Absolute Path: E:\order-processing-system\payment-service\src\main\java\com\example\paymentservice\config\KafkaProducerConfig.java
+================================================================================
+
+package com.example.paymentservice.config;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.common.serialization.StringSerializer;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.kafka.core.DefaultKafkaProducerFactory;
+import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.kafka.core.ProducerFactory;
+import org.springframework.kafka.support.serializer.JsonSerializer;
+
+import java.util.HashMap;
+import java.util.Map;
+
+@Configuration
+public class KafkaProducerConfig {
+    @Value("${spring.kafka.bootstrap-servers}")
+    private String bootstrapServers;
+
+    @Value("${app.kafka.producer.acks:all}")
+    private String acks;
+
+    @Value("${app.kafka.producer.retries:5}")
+    private int retries;
+
+    @Bean
+    public ObjectMapper objectMapper() {
+        ObjectMapper mapper = new ObjectMapper();
+        mapper.registerModule(new JavaTimeModule());
+        mapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+        return mapper;
+    }
+
+    @Bean
+    public ProducerFactory<String, Object> producerFactory() {
+        Map<String, Object> configProps = new HashMap<>();
+        configProps.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
+        configProps.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
+        configProps.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, JsonSerializer.class);
+        configProps.put(ProducerConfig.ACKS_CONFIG, acks);
+        configProps.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);
+        configProps.put(ProducerConfig.RETRIES_CONFIG, retries);
+        configProps.put(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION, 5);
+        configProps.put(JsonSerializer.ADD_TYPE_INFO_HEADERS, true);
+        return new DefaultKafkaProducerFactory<>(configProps);
+    }
+
+    @Bean
+    public KafkaTemplate<String, Object> kafkaTemplate() {
+        return new KafkaTemplate<>(producerFactory());
+    }
+}
+
+
+================================================================================
+File 19: payment-service/src/main/java/com/example/paymentservice/config/KafkaTopicConfig.java
+Absolute Path: E:\order-processing-system\payment-service\src\main\java\com\example\paymentservice\config\KafkaTopicConfig.java
+================================================================================
+
+package com.example.paymentservice.config;
+
+import org.apache.kafka.clients.admin.NewTopic;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.kafka.config.TopicBuilder;
+
+@Configuration
+public class KafkaTopicConfig {
+    @Value("${app.kafka.topics.order-created}")
+    private String orderCreatedTopic;
+
+    @Value("${app.kafka.topics.payment-completed}")
+    private String paymentCompletedTopic;
+
+    @Value("${app.kafka.topics.payment-failed}")
+    private String paymentFailedTopic;
+
+    @Value("${app.kafka.topics.dead-letter-topic}")
+    private String dltTopic;
+
+    @Bean
+    public NewTopic orderCreatedTopic() {
+        return TopicBuilder.name(orderCreatedTopic)
+                .partitions(3)
+                .replicas(1)
+                .build();
+    }
+
+    @Bean
+    public NewTopic paymentCompletedTopic() {
+        return TopicBuilder.name(paymentCompletedTopic)
+                .partitions(3)
+                .replicas(1)
+                .build();
+    }
+
+    @Bean
+    public NewTopic paymentFailedTopic() {
+        return TopicBuilder.name(paymentFailedTopic)
+                .partitions(3)
+                .replicas(1)
+                .build();
+    }
+
+    @Bean
+    public NewTopic deadLetterTopic() {
+        return TopicBuilder.name(dltTopic)
+                .partitions(3)
+                .replicas(1)
+                .build();
+    }
+}
+
+
+================================================================================
+File 20: payment-service/src/main/java/com/example/paymentservice/event/OrderCreatedEvent.java
+Absolute Path: E:\order-processing-system\payment-service\src\main\java\com\example\paymentservice\event\OrderCreatedEvent.java
+================================================================================
+
+package com.example.paymentservice.event;
+
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
+
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class OrderCreatedEvent {
+    private String eventId;
+    private String orderId;
+    private String customerId;
+    private BigDecimal amount;
+    private LocalDateTime timestamp;
+}
+
+
+================================================================================
+File 21: payment-service/src/main/java/com/example/paymentservice/event/PaymentCompletedEvent.java
+Absolute Path: E:\order-processing-system\payment-service\src\main\java\com\example\paymentservice\event\PaymentCompletedEvent.java
+================================================================================
+
+package com.example.paymentservice.event;
+
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
+
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class PaymentCompletedEvent {
+    private String paymentId;
+    private String orderId;
+    private String customerId;
+    private BigDecimal amount;
+    private LocalDateTime timestamp;
+}
+
+
+================================================================================
+File 22: payment-service/src/main/java/com/example/paymentservice/event/PaymentFailedEvent.java
+Absolute Path: E:\order-processing-system\payment-service\src\main\java\com\example\paymentservice\event\PaymentFailedEvent.java
+================================================================================
+
+package com.example.paymentservice.event;
+
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
+
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class PaymentFailedEvent {
+    private String paymentId;
+    private String orderId;
+    private String customerId;
+    private BigDecimal amount;
+    private String failureReason;
+    private LocalDateTime timestamp;
+}
+
+
+================================================================================
+File 23: payment-service/src/main/java/com/example/paymentservice/exception/TransientPaymentException.java
+Absolute Path: E:\order-processing-system\payment-service\src\main\java\com\example\paymentservice\exception\TransientPaymentException.java
+================================================================================
+
+package com.example.paymentservice.exception;
+
+public class TransientPaymentException extends RuntimeException {
+    public TransientPaymentException(String message) {
+        super(message);
+    }
+}
+
+
+================================================================================
+File 24: payment-service/src/main/java/com/example/paymentservice/model/PaymentStatus.java
+Absolute Path: E:\order-processing-system\payment-service\src\main\java\com\example\paymentservice\model\PaymentStatus.java
+================================================================================
+
+package com.example.paymentservice.model;
+
+public enum PaymentStatus {
+    SUCCESS,
+    FAILED
+}
+
+
+================================================================================
+File 25: payment-service/src/main/java/com/example/paymentservice/payment/PaymentConsumer.java
+Absolute Path: E:\order-processing-system\payment-service\src\main\java\com\example\paymentservice\payment\PaymentConsumer.java
+================================================================================
+
+package com.example.paymentservice.payment;
+
+import com.example.paymentservice.event.OrderCreatedEvent;
+import com.example.paymentservice.model.PaymentStatus;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.springframework.kafka.annotation.KafkaListener;
+import org.springframework.kafka.support.Acknowledgment;
+import org.springframework.stereotype.Component;
+
+@Slf4j
+@Component
+@RequiredArgsConstructor
+public class PaymentConsumer {
+    private final PaymentService paymentService;
+
+    @KafkaListener(
+            topics = "${app.kafka.topics.order-created}",
+            groupId = "${app.kafka.consumer-groups.payment}",
+            containerFactory = "kafkaListenerContainerFactory")
+    public void consumeOrderCreated(
+            ConsumerRecord<String, OrderCreatedEvent> record,
+            Acknowledgment acknowledgment) {
+        log.info("PaymentConsumer received record -> Key: [{}], Partition: [{}], Offset: [{}], Thread: [{}]",
+                record.key(), record.partition(), record.offset(), Thread.currentThread().getName());
+        OrderCreatedEvent event = record.value();
+        if (event == null) {
+            log.warn("Null payload at partition [{}] offset [{}]. Committing and skipping.",
+                    record.partition(), record.offset());
+            acknowledgment.acknowledge();
+            return;
+        }
+        try {
+            if (paymentService.isAlreadyProcessed(event.getEventId())) {
+                log.warn("Duplicate delivery detected for eventId [{}] (order [{}]). Skipping re-processing.",
+                        event.getEventId(), event.getOrderId());
+                acknowledgment.acknowledge();
+                return;
+            }
+            PaymentStatus paymentStatus = paymentService.processPayment(event);
+            acknowledgment.acknowledge();
+            log.info("Manual offset committed for Partition [{}] at Offset [{}] with payment status [{}]",
+                    record.partition(), record.offset(), paymentStatus);
+        } catch (Exception ex) {
+            log.error("Error processing OrderCreatedEvent for key [{}]. Delegating to error handler.",
+                    record.key(), ex);
+            throw ex;
+        }
+    }
+}
+
+
+================================================================================
+File 26: payment-service/src/main/java/com/example/paymentservice/payment/PaymentService.java
+Absolute Path: E:\order-processing-system\payment-service\src\main\java\com\example\paymentservice\payment\PaymentService.java
+================================================================================
+
+package com.example.paymentservice.payment;
+
+import com.example.paymentservice.event.OrderCreatedEvent;
+import com.example.paymentservice.event.PaymentCompletedEvent;
+import com.example.paymentservice.event.PaymentFailedEvent;
+import com.example.paymentservice.exception.TransientPaymentException;
+import com.example.paymentservice.model.PaymentStatus;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.kafka.support.SendResult;
+import org.springframework.stereotype.Service;
+
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+
+@Slf4j
+@Service
+@RequiredArgsConstructor
+public class PaymentService {
+    private static final BigDecimal RETRY_TRIGGER_AMOUNT = new BigDecimal("9999.00");
+    private static final BigDecimal MAX_ALLOWED_AMOUNT = new BigDecimal("5000.00");
+    private static final long SEND_TIMEOUT_SECONDS = 10;
+    private final KafkaTemplate<String, Object> kafkaTemplate;
+    private final Set<String> processedEventIds = ConcurrentHashMap.newKeySet();
+
+    @Value("${app.kafka.topics.payment-completed}")
+    private String paymentCompletedTopic;
+
+    @Value("${app.kafka.topics.payment-failed}")
+    private String paymentFailedTopic;
+
+    public boolean isAlreadyProcessed(String eventId) {
+        return eventId != null && processedEventIds.contains(eventId);
+    }
+
+    public PaymentStatus processPayment(OrderCreatedEvent event) {
+        log.info("Executing payment check -> Order ID: [{}], Amount: [${}]",
+                event.getOrderId(), event.getAmount());
+        if (event.getAmount().compareTo(RETRY_TRIGGER_AMOUNT) == 0) {
+            log.warn("Simulating 3rd-party payment gateway timeout for Order ID: [{}]. The consumer container will retry with exponential back-off.", event.getOrderId());
+            throw new TransientPaymentException("Payment gateway timeout (simulated) - retryable error");
+        }
+        if (event.getAmount().compareTo(MAX_ALLOWED_AMOUNT) > 0) {
+            log.warn("Payment rejected for Order ID: [{}]. Amount exceeds the ${} limit.",
+                    event.getOrderId(), MAX_ALLOWED_AMOUNT);
+            publishPaymentFailed(event,
+                    "Transaction limit exceeded: max allowable amount is $" + MAX_ALLOWED_AMOUNT);
+            processedEventIds.add(event.getEventId());
+            return PaymentStatus.FAILED;
+        }
+        publishPaymentCompleted(event);
+        processedEventIds.add(event.getEventId());
+        return PaymentStatus.SUCCESS;
+    }
+
+    private void publishPaymentCompleted(OrderCreatedEvent event) {
+        PaymentCompletedEvent completedEvent = PaymentCompletedEvent.builder()
+                .paymentId(UUID.randomUUID().toString())
+                .orderId(event.getOrderId())
+                .customerId(event.getCustomerId())
+                .amount(event.getAmount())
+                .timestamp(LocalDateTime.now())
+                .build();
+        sendBlocking(paymentCompletedTopic, event.getOrderId(), completedEvent, "PaymentCompletedEvent");
+    }
+
+    private void publishPaymentFailed(OrderCreatedEvent event, String reason) {
+        PaymentFailedEvent failedEvent = PaymentFailedEvent.builder()
+                .paymentId(UUID.randomUUID().toString())
+                .orderId(event.getOrderId())
+                .customerId(event.getCustomerId())
+                .amount(event.getAmount())
+                .failureReason(reason)
+                .timestamp(LocalDateTime.now())
+                .build();
+        sendBlocking(paymentFailedTopic, event.getOrderId(), failedEvent, "PaymentFailedEvent");
+    }
+
+    private void sendBlocking(String topic, String key, Object payload, String eventType) {
+        try {
+            SendResult<String, Object> result = kafkaTemplate.send(topic, key, payload)
+                    .get(SEND_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            log.info("{} published -> Topic: [{}], Partition: [{}], Offset: [{}], Key: [{}]",
+                    eventType,
+                    result.getRecordMetadata().topic(),
+                    result.getRecordMetadata().partition(),
+                    result.getRecordMetadata().offset(),
+                    key);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while publishing " + eventType + " for order " + key, ie);
+        } catch (ExecutionException | TimeoutException ex) {
+            throw new IllegalStateException("Broker did not acknowledge " + eventType + " for order " + key, ex);
+        }
+    }
+}
+
+
+
+################################################################################
+# NOTIFICATION-SERVICE  (10 java files - src/main/java)
+################################################################################
+
+================================================================================
+File 27: notification-service/src/main/java/com/example/notificationservice/NotificationServiceApplication.java
+Absolute Path: E:\order-processing-system\notification-service\src\main\java\com\example\notificationservice\NotificationServiceApplication.java
+================================================================================
+
+package com.example.notificationservice;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+@SpringBootApplication
+public class NotificationServiceApplication {
+
+    public static void main(String[] args) {
+        SpringApplication.run(NotificationServiceApplication.class, args);
+    }
+
+}
+
+
+================================================================================
+File 28: notification-service/src/main/java/com/example/notificationservice/config/KafkaConsumerConfig.java
+Absolute Path: E:\order-processing-system\notification-service\src\main\java\com\example\notificationservice\config\KafkaConsumerConfig.java
+================================================================================
+
+package com.example.notificationservice.config;
+
+import com.example.notificationservice.event.NotificationEvent;
+import com.example.notificationservice.event.PaymentCompletedEvent;
+import com.example.notificationservice.event.PaymentFailedEvent;
+import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.header.Header;
+import org.apache.kafka.common.serialization.StringDeserializer;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.kafka.annotation.EnableKafka;
+import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
+import org.springframework.kafka.core.ConsumerFactory;
+import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
+import org.springframework.kafka.core.KafkaOperations;
+import org.springframework.kafka.listener.ContainerProperties;
+import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
+import org.springframework.kafka.listener.DefaultErrorHandler;
+import org.springframework.kafka.support.serializer.ErrorHandlingDeserializer;
+import org.springframework.kafka.support.serializer.JsonDeserializer;
+import org.springframework.util.backoff.ExponentialBackOff;
+import org.springframework.util.backoff.FixedBackOff;
+
+import java.util.HashMap;
+import java.util.Map;
+
+@Slf4j
+@EnableKafka
+@Configuration
+public class KafkaConsumerConfig {
+    @Value("${spring.kafka.bootstrap-servers}")
+    private String bootstrapServers;
+
+    @Value("${app.kafka.topics.dead-letter-topic}")
+    private String dltTopic;
+
+    @Value("${app.kafka.retry.initial-interval-ms:1000}")
+    private long retryInitialIntervalMs;
+
+    @Value("${app.kafka.retry.multiplier:2.0}")
+    private double retryMultiplier;
+
+    @Value("${app.kafka.retry.max-elapsed-time-ms:15000}")
+    private long retryMaxElapsedTimeMs;
+
+    private Map<String, Object> baseConsumerProps() {
+        Map<String, Object> props = new HashMap<>();
+        props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
+        props.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
+        props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+        props.put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, 50);
+        props.put(ConsumerConfig.RECONNECT_BACKOFF_MS_CONFIG, 3000);
+        props.put(ConsumerConfig.RECONNECT_BACKOFF_MAX_MS_CONFIG, 10000);
+        return props;
+    }
+
+    private <T> ConsumerFactory<String, T> typedFactory(Class<T> targetType) {
+        Map<String, Object> props = baseConsumerProps();
+        JsonDeserializer<T> valueDeserializer = new JsonDeserializer<>(targetType);
+        valueDeserializer.addTrustedPackages("com.example.notificationservice.event", "java.util", "java.lang");
+        valueDeserializer.setUseTypeHeaders(true);
+        valueDeserializer.setRemoveTypeHeaders(false);
+        ErrorHandlingDeserializer<String> keyDeserializer = new ErrorHandlingDeserializer<>(new StringDeserializer());
+        ErrorHandlingDeserializer<T> valDeserializer = new ErrorHandlingDeserializer<>(valueDeserializer);
+        return new DefaultKafkaConsumerFactory<>(props, keyDeserializer, valDeserializer);
+    }
+
+    @Bean
+    public ConsumerFactory<String, PaymentCompletedEvent> paymentCompletedConsumerFactory() {
+        Map<String, Object> props = baseConsumerProps();
+        JsonDeserializer<PaymentCompletedEvent> valueDeserializer = new JsonDeserializer<>(PaymentCompletedEvent.class);
+        valueDeserializer.addTrustedPackages("com.example.notificationservice.event", "java.util", "java.lang");
+        valueDeserializer.setUseTypeHeaders(true);
+        valueDeserializer.setRemoveTypeHeaders(false);
+        ErrorHandlingDeserializer<String> keyDeserializer = new ErrorHandlingDeserializer<>(new StringDeserializer());
+        ErrorHandlingDeserializer<PaymentCompletedEvent> valDeserializer = new ErrorHandlingDeserializer<>(valueDeserializer);
+        return new DefaultKafkaConsumerFactory<>(props, keyDeserializer, valDeserializer);
+    }
+
+    @Bean
+    public ConsumerFactory<String, PaymentFailedEvent> paymentFailedConsumerFactory() {
+        return typedFactory(PaymentFailedEvent.class);
+    }
+
+    @Bean
+    public ConsumerFactory<String, NotificationEvent> notificationEventConsumerFactory() {
+        return typedFactory(NotificationEvent.class);
+    }
+
+    @Bean
+    public ConsumerFactory<String, String> dltRawConsumerFactory() {
+        Map<String, Object> props = baseConsumerProps();
+        return new DefaultKafkaConsumerFactory<>(props, new StringDeserializer(), new StringDeserializer());
+    }
+
+    @Bean
+    public DefaultErrorHandler notificationErrorHandler(KafkaOperations<String, Object> kafkaOperations) {
+        DeadLetterPublishingRecoverer recoverer = new DeadLetterPublishingRecoverer(kafkaOperations,
+                (record, exception) -> {
+                    log.error("Retries exhausted for key [{}] on topic [{}]. Routing to DLT [{}].", record.key(), record.topic(), dltTopic, exception);
+                    Header originalTopicHeader = record.headers().lastHeader("kafka_dlt-original-topic");
+                    String original = originalTopicHeader != null ? new String(originalTopicHeader.value()) : record.topic();
+                    log.error("Original topic was [{}] for key [{}].", original, record.key());
+                    return new TopicPartition(dltTopic, record.partition());
+                });
+        ExponentialBackOff backOff = new ExponentialBackOff(retryInitialIntervalMs, retryMultiplier);
+        backOff.setMaxElapsedTime(retryMaxElapsedTimeMs);
+        DefaultErrorHandler handler = new DefaultErrorHandler(recoverer, backOff);
+        handler.addNotRetryableExceptions(IllegalArgumentException.class);
+        return handler;
+    }
+
+    @Bean
+    public DefaultErrorHandler dltMonitorErrorHandler() {
+        FixedBackOff backOff = new FixedBackOff(1000L, 2L);
+        return new DefaultErrorHandler(backOff);
+    }
+
+    @Bean
+    public ConcurrentKafkaListenerContainerFactory<String, PaymentCompletedEvent> paymentCompletedKafkaListenerContainerFactory(
+            ConsumerFactory<String, PaymentCompletedEvent> paymentCompletedConsumerFactory,
+            DefaultErrorHandler notificationErrorHandler) {
+        ConcurrentKafkaListenerContainerFactory<String, PaymentCompletedEvent> factory = new ConcurrentKafkaListenerContainerFactory<>();
+        factory.setConsumerFactory(paymentCompletedConsumerFactory);
+        factory.setCommonErrorHandler(notificationErrorHandler);
+        factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL_IMMEDIATE);
+        factory.setConcurrency(3);
+        return factory;
+    }
+
+    @Bean
+    public ConcurrentKafkaListenerContainerFactory<String, PaymentFailedEvent> paymentFailedKafkaListenerContainerFactory(
+            ConsumerFactory<String, PaymentFailedEvent> paymentFailedConsumerFactory,
+            DefaultErrorHandler notificationErrorHandler) {
+        ConcurrentKafkaListenerContainerFactory<String, PaymentFailedEvent> factory = new ConcurrentKafkaListenerContainerFactory<>();
+        factory.setConsumerFactory(paymentFailedConsumerFactory);
+        factory.setCommonErrorHandler(notificationErrorHandler);
+        factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL_IMMEDIATE);
+        factory.setConcurrency(3);
+        return factory;
+    }
+
+    @Bean
+    public ConcurrentKafkaListenerContainerFactory<String, NotificationEvent> notificationEventKafkaListenerContainerFactory(
+            ConsumerFactory<String, NotificationEvent> notificationEventConsumerFactory,
+            DefaultErrorHandler notificationErrorHandler) {
+        ConcurrentKafkaListenerContainerFactory<String, NotificationEvent> factory = new ConcurrentKafkaListenerContainerFactory<>();
+        factory.setConsumerFactory(notificationEventConsumerFactory);
+        factory.setCommonErrorHandler(notificationErrorHandler);
+        factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL_IMMEDIATE);
+        factory.setConcurrency(3);
+        return factory;
+    }
+
+    @Bean
+    public ConcurrentKafkaListenerContainerFactory<String, String> dltRawKafkaListenerContainerFactory(
+            ConsumerFactory<String, String> dltRawConsumerFactory,
+            DefaultErrorHandler dltMonitorErrorHandler) {
+        ConcurrentKafkaListenerContainerFactory<String, String> factory = new ConcurrentKafkaListenerContainerFactory<>();
+        factory.setConsumerFactory(dltRawConsumerFactory);
+        factory.setCommonErrorHandler(dltMonitorErrorHandler);
+        factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL_IMMEDIATE);
+        factory.setConcurrency(1);
+        return factory;
+    }
+}
+
+
+================================================================================
+File 29: notification-service/src/main/java/com/example/notificationservice/config/KafkaProducerConfig.java
+Absolute Path: E:\order-processing-system\notification-service\src\main\java\com\example\notificationservice\config\KafkaProducerConfig.java
+================================================================================
+
+package com.example.notificationservice.config;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.common.serialization.StringSerializer;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.kafka.core.DefaultKafkaProducerFactory;
+import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.kafka.core.ProducerFactory;
+import org.springframework.kafka.support.serializer.JsonSerializer;
+
+import java.util.HashMap;
+import java.util.Map;
+
+@Configuration
+public class KafkaProducerConfig {
+    @Value("${spring.kafka.bootstrap-servers}")
+    private String bootstrapServers;
+
+    @Value("${app.kafka.producer.acks:all}")
+    private String acks;
+
+    @Value("${app.kafka.producer.retries:5}")
+    private int retries;
+
+    @Bean
+    public ObjectMapper objectMapper() {
+        ObjectMapper mapper = new ObjectMapper();
+        mapper.registerModule(new JavaTimeModule());
+        mapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+        return mapper;
+    }
+
+    @Bean
+    public ProducerFactory<String, Object> producerFactory() {
+        Map<String, Object> configProps = new HashMap<>();
+        configProps.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
+        configProps.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
+        configProps.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, JsonSerializer.class);
+        configProps.put(ProducerConfig.ACKS_CONFIG, acks);
+        configProps.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);
+        configProps.put(ProducerConfig.RETRIES_CONFIG, retries);
+        configProps.put(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION, 5);
+        configProps.put(JsonSerializer.ADD_TYPE_INFO_HEADERS, true);
+        return new DefaultKafkaProducerFactory<>(configProps);
+    }
+
+    @Bean
+    public KafkaTemplate<String, Object> kafkaTemplate() {
+        return new KafkaTemplate<>(producerFactory());
+    }
+}
+
+
+================================================================================
+File 30: notification-service/src/main/java/com/example/notificationservice/config/KafkaTopicConfig.java
+Absolute Path: E:\order-processing-system\notification-service\src\main\java\com\example\notificationservice\config\KafkaTopicConfig.java
+================================================================================
+
+package com.example.notificationservice.config;
+
+import org.apache.kafka.clients.admin.NewTopic;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.kafka.config.TopicBuilder;
+
+@Configuration
+public class KafkaTopicConfig {
+    @Value("${app.kafka.topics.payment-completed}")
+    private String paymentCompletedTopic;
+
+    @Value("${app.kafka.topics.payment-failed}")
+    private String paymentFailedTopic;
+
+    @Value("${app.kafka.topics.notification-events}")
+    private String notificationEventsTopic;
+
+    @Value("${app.kafka.topics.dead-letter-topic}")
+    private String dltTopic;
+
+    @Bean
+    public NewTopic paymentCompletedTopic() {
+        return TopicBuilder.name(paymentCompletedTopic).partitions(3).replicas(1).build();
+    }
+
+    @Bean
+    public NewTopic paymentFailedTopic() {
+        return TopicBuilder.name(paymentFailedTopic).partitions(3).replicas(1).build();
+    }
+
+    @Bean
+    public NewTopic notificationEventsTopic() {
+        return TopicBuilder.name(notificationEventsTopic).partitions(3).replicas(1).build();
+    }
+
+    @Bean
+    public NewTopic deadLetterTopic() {
+        return TopicBuilder.name(dltTopic).partitions(3).replicas(1).build();
+    }
+}
+
+
+================================================================================
+File 31: notification-service/src/main/java/com/example/notificationservice/event/NotificationEvent.java
+Absolute Path: E:\order-processing-system\notification-service\src\main\java\com\example\notificationservice\event\NotificationEvent.java
+================================================================================
+
+package com.example.notificationservice.event;
+
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import java.time.LocalDateTime;
+
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class NotificationEvent {
+    private String notificationId;
+    private String orderId;
+    private String customerId;
+    private String recipient;
+    private String message;
+    private String status;
+    private LocalDateTime sentAt;
+}
+
+
+================================================================================
+File 32: notification-service/src/main/java/com/example/notificationservice/event/PaymentCompletedEvent.java
+Absolute Path: E:\order-processing-system\notification-service\src\main\java\com\example\notificationservice\event\PaymentCompletedEvent.java
+================================================================================
+
+package com.example.notificationservice.event;
+
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
+
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class PaymentCompletedEvent {
+    private String paymentId;
+    private String orderId;
+    private String customerId;
+    private BigDecimal amount;
+    private LocalDateTime timestamp;
+}
+
+
+================================================================================
+File 33: notification-service/src/main/java/com/example/notificationservice/event/PaymentFailedEvent.java
+Absolute Path: E:\order-processing-system\notification-service\src\main\java\com\example\notificationservice\event\PaymentFailedEvent.java
+================================================================================
+
+package com.example.notificationservice.event;
+
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
+
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class PaymentFailedEvent {
+    private String paymentId;
+    private String orderId;
+    private String customerId;
+    private BigDecimal amount;
+    private String failureReason;
+    private LocalDateTime timestamp;
+}
+
+
+================================================================================
+File 34: notification-service/src/main/java/com/example/notificationservice/notification/AuditConsumer.java
+Absolute Path: E:\order-processing-system\notification-service\src\main\java\com\example\notificationservice\notification\AuditConsumer.java
+================================================================================
+
+package com.example.notificationservice.notification;
+
+import com.example.notificationservice.event.NotificationEvent;
+import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.springframework.kafka.annotation.KafkaListener;
+import org.springframework.kafka.support.Acknowledgment;
+import org.springframework.stereotype.Component;
+
+@Slf4j
+@Component
+public class AuditConsumer {
+    @KafkaListener(
+            topics = "${app.kafka.topics.notification-events}",
+            groupId = "${app.kafka.consumer-groups.audit}",
+            containerFactory = "notificationEventKafkaListenerContainerFactory")
+    public void onNotificationEvent(ConsumerRecord<String, NotificationEvent> record, Acknowledgment ack) {
+        NotificationEvent event = record.value();
+        if (event == null) {
+            log.warn("Null NotificationEvent at partition [{}] offset [{}]. Committing and skipping.", record.partition(), record.offset());
+            ack.acknowledge();
+            return;
+        }
+        log.info("AUDIT LOG -> Order ID: [{}], Recipient: [{}], Status: [{}], Message: [{}], Partition: [{}], Offset: [{}]", event.getOrderId(), event.getRecipient(), event.getStatus(), event.getMessage(), record.partition(), record.offset());
+        ack.acknowledge();
+    }
+}
+
+
+================================================================================
+File 35: notification-service/src/main/java/com/example/notificationservice/notification/DltMonitorConsumer.java
+Absolute Path: E:\order-processing-system\notification-service\src\main\java\com\example\notificationservice\notification\DltMonitorConsumer.java
+================================================================================
+
+package com.example.notificationservice.notification;
+
+import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.common.header.Header;
+import org.springframework.kafka.annotation.KafkaListener;
+import org.springframework.kafka.support.Acknowledgment;
+import org.springframework.stereotype.Component;
+
+import java.nio.charset.StandardCharsets;
+
+@Slf4j
+@Component
+public class DltMonitorConsumer {
+    @KafkaListener(
+            topics = "${app.kafka.topics.dead-letter-topic}",
+            groupId = "${app.kafka.consumer-groups.dlt-monitor}",
+            containerFactory = "dltRawKafkaListenerContainerFactory")
+    public void onDeadLetter(ConsumerRecord<String, String> record, Acknowledgment ack) {
+        Header header = record.headers().lastHeader("kafka_dlt-original-topic");
+        String originalTopic = header != null ? new String(header.value(), StandardCharsets.UTF_8) : "unknown";
+        Header exceptionHeader = record.headers().lastHeader("kafka_dlt-exception-message");
+        String exceptionMessage = exceptionHeader != null ? new String(exceptionHeader.value(), StandardCharsets.UTF_8) : "unknown";
+        log.error("DLT MONITOR -> original topic [{}], key [{}], partition [{}], offset [{}], exception [{}], value [{}]", originalTopic, record.key(), record.partition(), record.offset(), exceptionMessage, record.value());
+        ack.acknowledge();
+    }
+}
+
+
+================================================================================
+File 36: notification-service/src/main/java/com/example/notificationservice/notification/NotificationConsumer.java
+Absolute Path: E:\order-processing-system\notification-service\src\main\java\com\example\notificationservice\notification\NotificationConsumer.java
+================================================================================
+
+package com.example.notificationservice.notification;
+
+import com.example.notificationservice.event.NotificationEvent;
+import com.example.notificationservice.event.PaymentCompletedEvent;
+import com.example.notificationservice.event.PaymentFailedEvent;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.kafka.annotation.KafkaListener;
+import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.kafka.support.Acknowledgment;
+import org.springframework.kafka.support.SendResult;
+import org.springframework.stereotype.Component;
+
+import java.time.LocalDateTime;
+import java.util.UUID;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+
+@Slf4j
+@Component
+@RequiredArgsConstructor
+public class NotificationConsumer {
+    private static final long SEND_TIMEOUT_SECONDS = 10;
+    private final KafkaTemplate<String, Object> kafkaTemplate;
+
+    @Value("${app.kafka.topics.notification-events}")
+    private String notificationEventsTopic;
+
+    @KafkaListener(topics = "${app.kafka.topics.payment-completed}",
+            groupId = "${app.kafka.consumer-groups.notification}",
+            containerFactory = "paymentCompletedKafkaListenerContainerFactory")
+    public void onPaymentCompleted(ConsumerRecord<String, PaymentCompletedEvent> record, Acknowledgment ack) {
+        PaymentCompletedEvent event = record.value();
+        if (event == null) {
+            log.warn("Null PaymentCompletedEvent at partition [{}] offset [{}]. Committing and skipping.", record.partition(), record.offset());
+            ack.acknowledge();
+            return;
+        }
+        log.info("NotificationConsumer consumed PaymentCompletedEvent for order [{}] from partition [{}] offset [{}].", event.getOrderId(), record.partition(), record.offset());
+        NotificationEvent notification = NotificationEvent.builder()
+                .notificationId(UUID.randomUUID().toString())
+                .orderId(event.getOrderId())
+                .customerId(event.getCustomerId())
+                .recipient("customer_" + event.getCustomerId() + "@domain.com")
+                .message("Payment of " + event.getAmount() + " succeeded. Your order is being prepared.")
+                .status("SENT")
+                .sentAt(LocalDateTime.now())
+                .build();
+        publishNotification(event.getOrderId(), notification);
+        ack.acknowledge();
+        log.info("Notification for order [{}] published and offset committed.", event.getOrderId());
+    }
+
+    @KafkaListener(
+            topics = "${app.kafka.topics.payment-failed}",
+            groupId = "${app.kafka.consumer-groups.notification}",
+            containerFactory = "paymentFailedKafkaListenerContainerFactory")
+    public void onPaymentFailed(ConsumerRecord<String, PaymentFailedEvent> record, Acknowledgment ack) {
+        PaymentFailedEvent event = record.value();
+        if (event == null) {
+            log.warn("Null PaymentFailedEvent at partition [{}] offset [{}]. Committing and skipping.", record.partition(), record.offset());
+            ack.acknowledge();
+            return;
+        }
+        log.info("NotificationConsumer consumed PaymentFailedEvent for order [{}] from partition [{}] offset [{}].", event.getOrderId(), record.partition(), record.offset());
+        NotificationEvent notification = NotificationEvent.builder()
+                .notificationId(UUID.randomUUID().toString())
+                .orderId(event.getOrderId())
+                .customerId(event.getCustomerId())
+                .recipient("customer_" + event.getCustomerId() + "@domain.com")
+                .message("Payment of $" + event.getAmount() + " failed: " + event.getFailureReason())
+                .status("FAILED_ALERT_SENT")
+                .sentAt(LocalDateTime.now())
+                .build();
+        publishNotification(event.getOrderId(), notification);
+        ack.acknowledge();
+        log.info("Failure notification for order [{}] published and offset committed.", event.getOrderId());
+    }
+
+    private void publishNotification(String orderId, NotificationEvent notification) {
+        try {
+            SendResult<String, Object> result = kafkaTemplate.send(notificationEventsTopic, orderId, notification).get(SEND_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            log.info("NotificationEvent published for order [{}] to partition [{}] offset [{}].", orderId, result.getRecordMetadata().partition(), result.getRecordMetadata().offset());
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while publishing NotificationEvent for order " + orderId, ie);
+        } catch (ExecutionException | TimeoutException ex) {
+            throw new IllegalStateException("Broker did not acknowledge NotificationEvent for order " + orderId, ex);
+        }
+    }
+}
+
+
+================================================================================
+END OF CODEBASE
+================================================================================
