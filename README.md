@@ -6,6 +6,50 @@ The system demonstrates asynchronous communication between independent services 
 
 ---
 
+# Kafka Architecture Diagram
+
+             ┌──────────────────┐
+             │   Order Service  │
+             │    Producer      │
+             └────────┬─────────┘
+                      │
+                      │ OrderCreatedEvent
+                      ▼
+              ┌─────────────────┐
+              │      Kafka      │
+              │  Topic:         │
+              │  order-created  │
+              │  P0 │ P1 │ P2   │
+              └────────┬────────┘
+                       │
+                       ▼
+             ┌──────────────────┐
+             │ Payment Service  │
+             │    Consumer      │
+             │  Consumer Group  │
+             └────────┬─────────┘
+                      │
+             ┌────────┴───────────┐
+             │                    │
+       Payment Success       Payment Failed
+             │                    │
+             ▼                    ▼
+    ┌─────────────────┐   ┌─────────────────┐
+    │ payment-        │   │ payment-failed  │
+    │ completed       │   │                 │
+    └────────┬────────┘   └────────┬────────┘
+             │                     │
+             └──────────┬──────────┘
+                        ▼
+              ┌──────────────────┐
+              │ Notification     │
+              │ Service          │
+              │    Consumer      │
+              └────────┬─────────┘
+                       │
+                       ▼
+                 Notification
+
 ## 1. Project Overview
 
 ### Technology Stack
